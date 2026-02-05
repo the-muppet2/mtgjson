@@ -44,24 +44,20 @@ def serialize_complex_types(df: pl.DataFrame) -> pl.DataFrame:
 
     if list_cols:
         for col_name in list_cols:
-            result = result.with_columns(
-                pl.col(col_name)
-                .map_batches(_list_to_csv_batch, return_dtype=pl.String)
-                .alias(col_name)
-            )
+            inner_type = schema[col_name].inner
+            if inner_type == pl.String:
+                result = result.with_columns(
+                    pl.col(col_name).list.join(", ").alias(col_name)
+                )
+            else:
+                result = result.with_columns(
+                    pl.col(col_name)
+                    .list.eval(pl.element().cast(pl.String))
+                    .list.join(", ")
+                    .alias(col_name)
+                )
 
     return result
-
-
-def _list_to_csv_batch(series: pl.Series) -> pl.Series:
-    """Batch convert list Series to comma-separated strings."""
-    return pl.Series(
-        [
-            ", ".join(str(item) for item in x) if x is not None else None
-            for x in series.to_list()
-        ],
-        dtype=pl.String,
-    )
 
 
 def _struct_to_json_batch(series: pl.Series) -> pl.Series:

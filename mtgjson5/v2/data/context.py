@@ -1147,17 +1147,29 @@ class PipelineContext:
             subset=["_mcm_name"]
         )
 
-        def apply_mcm_fixes(exp_name: str) -> str:
-            lower = exp_name.lower()
-            return mcm_fixes.get(lower, lower)
+        if mcm_fixes:
+            fixes_df = pl.DataFrame({
+                "orig_lower": list(mcm_fixes.keys()),
+                "fixed_lower": list(mcm_fixes.values()),
+            })
+            mcm_df = (
+                mcm_df.with_columns(
+                    pl.col("expansionName").str.to_lowercase().alias("_orig_lower")
+                )
+                .join(fixes_df, left_on="_orig_lower", right_on="orig_lower", how="left")
+                .with_columns(
+                    pl.coalesce(pl.col("fixed_lower"), pl.col("_orig_lower"))
+                    .alias("_exp_name_fixed")
+                )
+                .drop(["_orig_lower", "fixed_lower"])
+            )
+        else:
+            mcm_df = mcm_df.with_columns(
+                pl.col("expansionName").str.to_lowercase().alias("_exp_name_fixed")
+            )
 
         result = (
-            mcm_df.with_columns(
-                pl.col("expansionName")
-                .map_elements(apply_mcm_fixes, return_dtype=pl.String)
-                .alias("_exp_name_fixed")
-            )
-            .join(
+            mcm_df.join(
                 set_mapping,
                 left_on="_exp_name_fixed",
                 right_on="_mcm_name",

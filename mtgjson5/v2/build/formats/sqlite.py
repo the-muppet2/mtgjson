@@ -124,18 +124,27 @@ class SQLiteBuilder:
         ])
         cursor.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" ({cols})')
 
-        # Batch insert rows
         placeholders = ", ".join(["?" for _ in serialized.columns])
         col_names = ", ".join([f'"{c}"' for c in serialized.columns])
 
         batch_size = 10000
-        rows = serialized.rows()
-        for i in range(0, len(rows), batch_size):
-            batch = rows[i : i + batch_size]
+        batch: list[tuple] = []
+        row_count = 0
+        for row in serialized.iter_rows(named=False):
+            batch.append(row)
+            if len(batch) >= batch_size:
+                cursor.executemany(
+                    f'INSERT INTO "{table_name}" ({col_names}) VALUES ({placeholders})',
+                    batch,
+                )
+                row_count += len(batch)
+                batch = []
+        if batch:
             cursor.executemany(
                 f'INSERT INTO "{table_name}" ({col_names}) VALUES ({placeholders})',
                 batch,
             )
+            row_count += len(batch)
 
         if table_name in TABLE_INDEXES:
             for idx_name, col in TABLE_INDEXES[table_name]:
@@ -145,7 +154,7 @@ class SQLiteBuilder:
                         f'ON "{table_name}" ("{col}")'
                     )
 
-        return len(serialized)
+        return row_count
 
     def write(self, output_path: pathlib.Path | None = None) -> pathlib.Path | None:
         """Write SQLite database using native sqlite3.

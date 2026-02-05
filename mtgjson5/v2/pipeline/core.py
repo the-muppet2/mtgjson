@@ -1130,20 +1130,33 @@ def filter_keywords_for_face(lf: pl.LazyFrame) -> pl.LazyFrame:
     """
     Filter keywords to only those present in the face's text.
     """
+    # Add temporary row index for join key (uuid doesn't exist yet at this stage)
+    lf = lf.with_row_index("_kw_row_idx")
 
-    def _filter_logic(s: pl.Series) -> pl.Series:
-        out = []
-        for row in s:
-            txt = (row["text"] or "").lower()
-            kws = row["_all_keywords"] or []
-            out.append([k for k in kws if k.lower() in txt])
-        return pl.Series(out, dtype=pl.List(pl.String))
+    # Extract keywords that match text via explode pattern
+    keywords_matched = (
+        lf.select(["_kw_row_idx", "text", "_all_keywords"])
+        .with_columns(pl.col("text").fill_null("").str.to_lowercase().alias("_text_lower"))
+        .explode("_all_keywords")
+        .filter(
+            pl.col("_all_keywords").is_not_null()
+            & pl.col("_text_lower").str.contains(
+                pl.col("_all_keywords").str.to_lowercase(),
+                literal=True
+            )
+        )
+        .group_by("_kw_row_idx")
+        .agg(pl.col("_all_keywords").alias("keywords"))
+    )
 
-    return lf.with_columns(
-        pl.struct(["text", "_all_keywords"])
-        .map_batches(_filter_logic)
-        .alias("keywords")
-    ).drop("_all_keywords")
+    return (
+        lf.drop("_all_keywords")
+        .join(keywords_matched, on="_kw_row_idx", how="left")
+        .with_columns(
+            pl.col("keywords").fill_null(pl.lit([]).cast(pl.List(pl.String)))
+        )
+        .drop("_kw_row_idx")
+    )
 
 
 def add_booster_types(lf: pl.LazyFrame) -> pl.LazyFrame:
@@ -1542,24 +1555,17 @@ def add_other_face_ids(lf: pl.LazyFrame, ctx: PipelineContext) -> pl.LazyFrame:
         .agg(pl.col("_face_struct").alias("_all_faces"))
     )
 
-    def _filter_self_from_faces(row: dict) -> list[str]:
-        """Filter out current uuid from faces list while preserving side order."""
-        all_faces = row["all_faces"]
-        self_uuid = row["self_uuid"]
-        if all_faces is None:
-            return []
-        return [f["uuid"] for f in all_faces if f["uuid"] != self_uuid]
-
     lf = (
         lf.join(face_links, on="scryfallId", how="left")
         .with_columns(
-            pl.struct(
-                [
-                    pl.col("uuid").alias("self_uuid"),
-                    pl.col("_all_faces").alias("all_faces"),
-                ]
+            pl.when(pl.col("_all_faces").is_null())
+            .then(pl.lit([]).cast(pl.List(pl.String)))
+            .otherwise(
+                # Extract uuid field from each struct, then filter out self
+                pl.col("_all_faces")
+                .list.eval(pl.element().struct.field("uuid"))
+                .list.set_difference(pl.concat_list([pl.col("uuid")]))
             )
-            .map_elements(_filter_self_from_faces, return_dtype=pl.List(pl.String))
             .alias("otherFaceIds")
         )
         .drop("_all_faces")
@@ -2841,9 +2847,9 @@ def calculate_duel_deck(lf: pl.LazyFrame) -> pl.LazyFrame:
             .then(pl.lit(None).cast(pl.String))
             .otherwise(
                 # 0 -> 'a', 1 -> 'b', etc.
-                pl.lit("a").str.replace("a", "")
-                + pl.col("_deck_num").map_elements(
-                    lambda n: chr(ord("a") + n), return_dtype=pl.String
+                pl.col("_deck_num").replace_strict(
+                    {i: chr(ord("a") + i) for i in range(26)},
+                    default=None,
                 )
             )
             .alias("_calc_duelDeck"),

@@ -10,6 +10,7 @@ This module is our main Data Layer and is responsible for:
 
 import asyncio
 import json
+import os
 import pathlib
 import re
 import time
@@ -288,7 +289,8 @@ class GlobalCache:
         self._load_sets_metadata()
         self._load_missing_set_cards()
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        max_workers = min(10, max(4, (os.cpu_count() or 4)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(self._load_orientations): "orientations",
                 executor.submit(self._load_card_kingdom): "card_kingdom",
