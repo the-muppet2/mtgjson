@@ -255,8 +255,9 @@ class AtomicCardsAssembler(Assembler):
 class DeckAssembler(Assembler):
     """Assembles Deck objects with expanded card data."""
 
-    def __init__(self, ctx: AssemblyContext):
+    def __init__(self, ctx: AssemblyContext, deck_uuids: set[str] | None = None):
         super().__init__(ctx)
+        self._deck_uuids = deck_uuids
         self._uuid_index: dict[str, dict[str, Any]] | None = None
         self._token_uuids: set[str] | None = None
 
@@ -271,14 +272,21 @@ class DeckAssembler(Assembler):
         """
         if self._uuid_index is None:
             self._token_uuids = set()
-            cards_df = self.load_all_cards().collect()
+
+            cards_lf = self.load_all_cards()
+            if self._deck_uuids:
+                cards_lf = cards_lf.filter(pl.col("uuid").is_in(list(self._deck_uuids)))
+            cards_df = cards_lf.collect()
             models = CardSet.from_dataframe(cards_df)
             self._uuid_index = {
                 m.uuid: m.to_polars_dict(exclude_none=True) for m in models
             }
             del cards_df
 
-            tokens_df = self.load_all_tokens().collect()
+            tokens_lf = self.load_all_tokens()
+            if self._deck_uuids:
+                tokens_lf = tokens_lf.filter(pl.col("uuid").is_in(list(self._deck_uuids)))
+            tokens_df = tokens_lf.collect()
             if not tokens_df.is_empty():
                 token_models = CardToken.from_dataframe(tokens_df)
                 for m in token_models:

@@ -514,17 +514,36 @@ class PipelineContext:
         This is where PipelineContext does actual work - building derived
         lookups from the raw cached data.
         """
+        import gc
+
         LOGGER.info("Consolidating lookup tables...")
 
         self._build_identifiers_lookup()
+        gc.collect()
+
         self._build_oracle_data_lookup()
+        gc.collect()
+
         self._build_set_number_lookup()
+        gc.collect()
+
         self._build_name_lookup()
+        gc.collect()
+
         self._build_signatures_lookup()
+        gc.collect()
+
         self._build_watermark_overrides_lookup()
+        gc.collect()
+
         self._load_face_flavor_names()
+        gc.collect()
+
         self._build_mcm_set_map()
+        gc.collect()
+
         self._build_mcm_lookup()
+        gc.collect()
 
         return self
 
@@ -604,6 +623,7 @@ class PipelineContext:
         LOGGER.info(
             f"identifiers_lf: {result.height:,} rows x {len(result.columns)} cols"
         )
+        del result
 
     def _build_oracle_data_lookup(self) -> None:
         """
@@ -689,6 +709,7 @@ class PipelineContext:
         LOGGER.info(
             f"oracle_data_lf: {result.height:,} rows x {len(result.columns)} cols"
         )
+        del result, frames
 
     def _build_set_number_lookup(self) -> None:
         """
@@ -923,6 +944,7 @@ class PipelineContext:
         LOGGER.info(
             f"set_number_lf: {result.height:,} rows x {len(result.columns)} cols"
         )
+        del result, frames
 
     def _load_duel_deck_sides(self) -> pl.DataFrame | None:
         """Load duel deck sides from resource JSON."""
@@ -985,6 +1007,7 @@ class PipelineContext:
 
         self.name_lf = result.lazy()
         LOGGER.info(f"name_lf: {result.height:,} rows x {len(result.columns)} cols")
+        del result, frames
 
     def _build_signatures_lookup(self) -> None:
         """
@@ -1022,6 +1045,7 @@ class PipelineContext:
         LOGGER.info(
             f"signatures_lf: {result.height:,} rows x {len(result.columns)} cols"
         )
+        del result
 
     def _build_watermark_overrides_lookup(self) -> None:
         """
@@ -1056,6 +1080,7 @@ class PipelineContext:
         LOGGER.info(
             f"watermark_overrides_lf: {result.height:,} rows x {len(result.columns)} cols"
         )
+        del result
 
     def _load_face_flavor_names(self) -> None:
         """
@@ -1193,6 +1218,7 @@ class PipelineContext:
             .unique(subset=["setCode", "nameLower", "number"], keep="first")
         )
         self._test_data["_mcm_lookup_lf"] = result.lazy()
+        del result
 
     def _build_mcm_set_map(self) -> None:
         """

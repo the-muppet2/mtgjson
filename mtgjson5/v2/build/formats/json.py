@@ -178,7 +178,25 @@ class JsonOutputBuilder:
         if len(decks_df) == 0:
             return 0
 
-        assembler = self.ctx.deck_assembler()
+        deck_uuids: set[str] = set()
+        board_cols = [
+            "mainBoard",
+            "sideBoard",
+            "commander",
+            "displayCommander",
+            "planes",
+            "schemes",
+            "tokens",
+        ]
+        for col in board_cols:
+            if col in decks_df.columns:
+                for card_list in decks_df[col].to_list():
+                    if card_list:
+                        for ref in card_list:
+                            if isinstance(ref, dict) and ref.get("uuid"):
+                                deck_uuids.add(ref["uuid"])
+
+        assembler = self.ctx.deck_assembler(deck_uuids=deck_uuids if deck_uuids else None)
 
         meta_dict = self.ctx.meta
         count = 0

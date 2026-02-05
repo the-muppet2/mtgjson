@@ -47,10 +47,12 @@ class AssemblyContext:
     tokens_dir: pathlib.Path
     set_meta: dict[str, dict[str, Any]]
     meta: dict[str, str]
-    decks_df: pl.DataFrame | None = None
-    sealed_df: pl.DataFrame | None = None
+    _decks_lf: pl.LazyFrame | pl.DataFrame | None = field(default=None, repr=False)
+    _sealed_lf: pl.LazyFrame | pl.DataFrame | None = field(default=None, repr=False)
+    _token_products_lf: pl.LazyFrame | pl.DataFrame | None = field(
+        default=None, repr=False
+    )
     booster_configs: dict[str, dict[str, Any]] = field(default_factory=dict)
-    token_products: dict[str, list] = field(default_factory=dict)
     output_path: pathlib.Path = field(
         default_factory=lambda: MtgjsonConfig().output_path
     )
@@ -60,6 +62,42 @@ class AssemblyContext:
     card_type_data: dict[str, list[str]] = field(default_factory=dict)
     super_types: list[str] = field(default_factory=list)
     planar_types: list[str] = field(default_factory=list)
+
+    @cached_property
+    def decks_df(self) -> pl.DataFrame | None:
+        """Lazily collect decks DataFrame on first access."""
+        if self._decks_lf is None:
+            return None
+        if isinstance(self._decks_lf, pl.LazyFrame):
+            return self._decks_lf.collect()
+        return self._decks_lf
+
+    @cached_property
+    def sealed_df(self) -> pl.DataFrame | None:
+        """Lazily collect sealed products DataFrame on first access."""
+        if self._sealed_lf is None:
+            return None
+        if isinstance(self._sealed_lf, pl.LazyFrame):
+            return self._sealed_lf.collect()
+        return self._sealed_lf
+
+    @cached_property
+    def token_products(self) -> dict[str, list]:
+        """Lazily build token products dict on first access."""
+        if self._token_products_lf is None:
+            return {}
+        tp_df = self._token_products_lf
+        if isinstance(tp_df, pl.LazyFrame):
+            tp_df = tp_df.collect()
+        if tp_df.is_empty():
+            return {}
+        return {
+            uuid: json.loads(raw)
+            for uuid, raw in zip(
+                tp_df["uuid"].to_list(), tp_df["tokenProducts"].to_list()
+            )
+            if uuid and raw
+        }
 
     @classmethod
     def from_pipeline(cls, ctx: PipelineContext) -> AssemblyContext:
@@ -135,15 +173,16 @@ class AssemblyContext:
                 else:
                     meta["tokenSetCode"] = None
 
-        LOGGER.info("Loading deck data...")
-        decks_df = ctx.decks_lf
-        if decks_df is not None and isinstance(decks_df, pl.LazyFrame):
-            decks_df = decks_df.collect()  # type: ignore[assignment]
+        # Store LazyFrames for lazy loading - don't collect yet
+        LOGGER.info("Storing deck data reference (lazy)...")
+        decks_lf = ctx.decks_lf
 
-        LOGGER.info("Loading sealed products...")
-        sealed_df = build_sealed_products_lf(ctx)
-        if isinstance(sealed_df, pl.LazyFrame):
-            sealed_df = sealed_df.collect()  # type: ignore[assignment]
+        LOGGER.info("Storing sealed products reference (lazy)...")
+        sealed_lf = build_sealed_products_lf(ctx)
+
+        # Store token products LazyFrame for lazy loading
+        LOGGER.info("Storing token products reference (lazy)...")
+        token_products_lf = ctx.token_products_lf
 
         booster_configs: dict[str, dict] = {}
         for code, meta in set_meta.items():
@@ -153,21 +192,6 @@ class AssemblyContext:
                     booster_configs[code] = orjson.loads(booster_raw)
             elif isinstance(booster_raw, dict):
                 booster_configs[code] = booster_raw
-
-        # Load token products lookup (uuid -> list of product dicts)
-        LOGGER.info("Loading token products...")
-        token_products: dict[str, list] = {}
-        tp_lf = ctx.token_products_lf
-        if tp_lf is not None:
-            tp_df = tp_lf.collect() if isinstance(tp_lf, pl.LazyFrame) else tp_lf
-            if not tp_df.is_empty():
-                uuids = tp_df["uuid"].to_list()
-                raw_products = tp_df["tokenProducts"].to_list()
-                token_products = {
-                    uuid: json.loads(raw)
-                    for uuid, raw in zip(uuids, raw_products)
-                    if uuid and raw
-                }
 
         meta_obj = MtgjsonMetaObject()
         meta_dict = {"date": meta_obj.date, "version": meta_obj.version}
@@ -191,10 +215,10 @@ class AssemblyContext:
             tokens_dir=tokens_dir,
             set_meta=set_meta,
             meta=meta_dict,
-            decks_df=decks_df,  # type: ignore[arg-type]
-            sealed_df=sealed_df,  # type: ignore[arg-type]
+            _decks_lf=decks_lf,
+            _sealed_lf=sealed_lf,
+            _token_products_lf=token_products_lf,
             booster_configs=booster_configs,
-            token_products=token_products,
             keyword_data=keyword_data,
             card_type_data=card_type_data,
             super_types=super_types,
@@ -292,20 +316,22 @@ class AssemblyContext:
         LOGGER.info("Loading meta information...")
         LOGGER.debug(f"Loaded meta: {meta_dict}")
 
-        return cls(
+        instance = cls(
             parquet_dir=parquet_dir,
             tokens_dir=tokens_dir,
             set_meta=set_meta,
             meta=meta_dict,
-            decks_df=decks_df,
-            sealed_df=sealed_df,
+            _decks_lf=decks_df,
+            _sealed_lf=sealed_df,
             booster_configs=booster_configs,
-            token_products=token_products,
             keyword_data=keyword_data,
             card_type_data=card_type_data,
             super_types=super_types,
             planar_types=planar_types,
         )
+        if token_products:
+            instance.__dict__["token_products"] = token_products
+        return instance
 
     def save_cache(self, cache_dir: pathlib.Path | None = None) -> None:
         """Save context to cache for fast rebuilds."""
@@ -398,11 +424,16 @@ class AssemblyContext:
 
         return DeckListAssembler(self)
 
-    def deck_assembler(self) -> DeckAssembler:
-        """Create a DeckAssembler for expanding deck card/token references."""
+    def deck_assembler(self, deck_uuids: set[str] | None = None) -> DeckAssembler:
+        """Create a DeckAssembler for expanding deck card/token references.
+
+        Args:
+            deck_uuids: Optional set of UUIDs referenced in decks.
+            When provided, only these cards/tokens are loaded.
+        """
         from .assemble import DeckAssembler
 
-        return DeckAssembler(self)
+        return DeckAssembler(self, deck_uuids=deck_uuids)
 
     @cached_property
     def tcgplayer_skus(self) -> TcgplayerSkusAssembler:
