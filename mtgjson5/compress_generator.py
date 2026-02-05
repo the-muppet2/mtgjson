@@ -560,98 +560,22 @@ def compress_mtgjson_contents_parallel(
     """
     Compress all files within the MTGJSON output directory using parallel processing.
 
+    This function delegates to the optimized v2 implementation which features:
+    - Sequential format compression per file (avoids thread explosion)
+    - Optional Intel ISA-L hardware acceleration for gzip
+    - Optimized compression presets (xz=3, larger chunks)
+
     Args:
         directory: Directory containing files to compress
         max_workers: Max parallel workers (default based on CPU count)
-        streaming: use streaming compression
+        streaming: Ignored (v2 always uses streaming). Kept for backwards compatibility.
 
     Returns:
         Dict with compression statistics
     """
-    workers = max_workers or _get_compression_workers()
-    LOGGER.info(
-        f"Starting parallel compression on {directory.name} ({workers} workers)"
+    from mtgjson5.v2.build.compression import (
+        compress_mtgjson_contents_parallel as _v2_compress_parallel,
     )
 
-    compiled_names = MtgjsonStructuresObject().get_all_compiled_file_names()
-
-    set_files = [
-        f
-        for f in directory.glob("*.json")
-        if f.stem not in compiled_names and f.stem.isupper()
-    ]
-    deck_files = list(directory.joinpath("decks").glob("*.json"))
-
-    # SQL files
-    sql_dir = directory.joinpath("sql")
-    if sql_dir.exists():
-        sql_files = (
-            list(sql_dir.glob("*.sql"))
-            + list(sql_dir.glob("*.sqlite"))
-            + list(sql_dir.glob("*.psql"))
-        )
-    else:
-        sql_files = (
-            list(directory.glob("*.sql"))
-            + list(directory.glob("*.sqlite"))
-            + list(directory.glob("*.psql"))
-        )
-
-    # CSV files
-    csv_files = list(directory.joinpath("csv").glob("*.csv"))
-
-    # Parquet files
-    parquet_files = list(directory.joinpath("parquet").glob("*.parquet"))
-
-    # Compiled files
-    compiled_dir = directory.joinpath("Compiled")
-    if compiled_dir.exists():
-        compiled_files = list(compiled_dir.glob("*.json"))
-    else:
-        compiled_files = [
-            f for f in directory.glob("*.json") if f.stem in compiled_names
-        ]
-
-    all_files = (
-        set_files + deck_files + sql_files + csv_files + parquet_files + compiled_files
-    )
-
-    stats = compress_files_parallel(all_files, workers, streaming=streaming)
-
-    if all_files:
-        LOGGER.info(f"Compressing {len(all_files)} files")
-        stats = compress_files_parallel(all_files, workers)
-
-    # Directory archives
-    if set_files:
-        LOGGER.info(f"Creating archive: {ALL_SETS_DIRECTORY}")
-        _compress_directory_python(
-            set_files,
-            directory.joinpath(ALL_SETS_DIRECTORY),
-        )
-
-    if deck_files:
-        LOGGER.info(f"Creating archive: {ALL_DECKS_DIRECTORY}")
-        _compress_directory_python(
-            deck_files,
-            directory.joinpath(ALL_DECKS_DIRECTORY),
-        )
-
-    if csv_files:
-        LOGGER.info(f"Creating archive: {ALL_CSVS_DIRECTORY}")
-        _compress_directory_python(
-            csv_files,
-            directory.joinpath(ALL_CSVS_DIRECTORY),
-        )
-
-    if parquet_files:
-        LOGGER.info(f"Creating archive: {ALL_PARQUETS_DIRECTORY}")
-        _compress_directory_python(
-            parquet_files,
-            directory.joinpath(ALL_PARQUETS_DIRECTORY),
-        )
-
-    LOGGER.info(
-        f"Finished parallel compression: {stats['success']}/{stats['total']} files"
-    )
-    return stats
+    LOGGER.info("Using optimized v2 compression pipeline")
+    return _v2_compress_parallel(directory, max_workers=max_workers)

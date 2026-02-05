@@ -197,6 +197,11 @@ def parse_args() -> argparse.Namespace:
         metavar="BUCKET_NAME",
         help="Upload finished results to an S3 bucket.",
     )
+    mtgjson_arg_group.add_argument(
+        "--compress-v2",
+        action="store_true",
+        help="Run v2 compression on output directory and exit (no build). ",
+    )
 
     # Show help menu if no arguments are passed
     if len(sys.argv) == 1:

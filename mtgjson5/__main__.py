@@ -86,6 +86,18 @@ def dispatcher(args: argparse.Namespace) -> None:
     from mtgjson5.v2.data import PipelineContext
     from mtgjson5.v2.pipeline.core import build_cards
 
+    if args.compress_v2:
+        from mtgjson5.v2.build.compression import (
+            compress_mtgjson_contents_parallel as v2_compress,
+        )
+
+        output_path = MtgjsonConfig().output_path
+        LOGGER.info(f"Running v2 compression on {output_path}")
+        stats = v2_compress(output_path)
+        LOGGER.info(f"Compression complete: {stats}")
+        generate_output_file_hashes(output_path)
+        return
+
     # Legacy price-only build (non-v2) - build prices and exit
     if args.price_build and not args.polars:
         all_prices, today_prices = PriceBuilder().build_prices()
