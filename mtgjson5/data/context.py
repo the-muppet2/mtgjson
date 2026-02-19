@@ -505,9 +505,14 @@ class PipelineContext:
         """
         LOGGER.info("Consolidating lookup tables...")
 
+        # Collect cards_lf once for methods that need it
+        cards_df: pl.DataFrame | None = None
+        if self.cards_lf is not None:
+            cards_df = self.cards_lf.collect() if isinstance(self.cards_lf, pl.LazyFrame) else self.cards_lf
+
         self._build_identifiers_lookup()
-        self._build_oracle_data_lookup()
-        self._build_set_number_lookup()
+        self._build_oracle_data_lookup(cards_df)
+        self._build_set_number_lookup(cards_df)
         self._build_name_lookup()
         self._build_signatures_lookup()
         self._build_watermark_overrides_lookup()
@@ -592,7 +597,7 @@ class PipelineContext:
         self.identifiers_lf = result.lazy()
         LOGGER.info(f"identifiers_lf: {result.height:,} rows x {len(result.columns)} cols")
 
-    def _build_oracle_data_lookup(self) -> None:
+    def _build_oracle_data_lookup(self, cards_df: pl.DataFrame | None = None) -> None:
         """
         Build consolidated oracle data lookup (by oracleId).
         """
@@ -633,17 +638,11 @@ class PipelineContext:
                 LOGGER.info(f"oracle_data: +rulings ({rulings_agg.height:,} rows)")
 
         # Printings + originalReleaseDate (computed from cards_lf)
-        cards_raw = self.cards_lf
-        if cards_raw is not None:
-            if isinstance(cards_raw, pl.LazyFrame):
-                cards: pl.DataFrame = cards_raw.collect()
-            else:
-                cards = cards_raw
-
+        if cards_df is not None:
             # For multi-face cards, oracle_id may be null at card level but present in card_faces
             # Coalesce from first face's oracle_id if available
             printings = (
-                cards.with_columns(
+                cards_df.with_columns(
                     pl.coalesce(
                         pl.col("oracleId"),
                         pl.col("cardFaces").list.get(0).struct.field("oracle_id"),
@@ -671,7 +670,7 @@ class PipelineContext:
         self.oracle_data_lf = result.lazy()
         LOGGER.info(f"oracle_data_lf: {result.height:,} rows x {len(result.columns)} cols")
 
-    def _build_set_number_lookup(self) -> None:
+    def _build_set_number_lookup(self, cards_df: pl.DataFrame | None = None) -> None:
         """Build consolidated lookup by setCode + number.
 
         Aggregates foreign data, applies exceptions, generates foreign UUIDs,
@@ -680,16 +679,10 @@ class PipelineContext:
         frames: list[tuple[str, pl.DataFrame]] = []
 
         # Foreign data: aggregate non-English cards by set+number
-        cards_raw = self.cards_lf
-        if cards_raw is not None:
-            if isinstance(cards_raw, pl.LazyFrame):
-                cards: pl.DataFrame = cards_raw.collect()
-            else:
-                cards = cards_raw
-
-            default_lang_lookup = self._build_default_language_lookup(cards)
+        if cards_df is not None:
+            default_lang_lookup = self._build_default_language_lookup(cards_df)
             fd_include, fd_exclude = self._parse_foreign_data_exceptions()
-            foreign_df = self._build_foreign_data_df(cards, default_lang_lookup, fd_include, fd_exclude)
+            foreign_df = self._build_foreign_data_df(cards_df, default_lang_lookup, fd_include, fd_exclude)
 
             if foreign_df.height > 0:
                 frames.append(("foreign", foreign_df))
